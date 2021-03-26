@@ -2,8 +2,6 @@
 
 namespace Webleit\ZohoCrmApi\Modules;
 
-use Webleit\ZohoCrmApi\Models\Model;
-
 class Org extends Module
 {
     public function getUrlPath(): string
@@ -21,12 +19,12 @@ class Org extends Module
         return \Webleit\ZohoCrmApi\Models\Org::class;
     }
 
-    public function get(string $id, array $params = []): Model
+    public function get($id = null, $params = [])
     {
         $item = $this->client->get($this->getUrl());
 
         if (! is_array($item)) {
-            return $this->make([]);
+            return $item;
         }
 
         $data = array_shift($item[$this->getResourceKey()]);

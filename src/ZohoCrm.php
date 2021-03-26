@@ -50,8 +50,8 @@ class ZohoCrm implements Contracts\ProvidesModules
     }
 
     /**
-     * @param $name
-     * @return Contracts\Module|Records|null
+     * @throws Exception\ApiError
+     * @throws Exception\GrantCodeNotSetException
      */
     public function __get($name)
     {
@@ -64,9 +64,15 @@ class ZohoCrm implements Contracts\ProvidesModules
         return $this->createRecordsModule($name);
     }
 
-    public function createRecordsModule(string $name): Records
+    public function createRecordsModule(string $name): ?Records
     {
-        return new Records($this->getClient(), $name);
+        $modules = $this->getApiModules();
+        if ($modules->has($name)) {
+            /** @var Records $recordsModule */
+            return new Records($this->getClient(), $name);
+        }
+
+        return null;
     }
 
     public function getApiModules(): Collection

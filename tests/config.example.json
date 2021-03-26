@@ -1,9 +1,10 @@
 {
   "client_id" : "",
   "client_secret": "",
-  "grant_code": "",
+  "grant_token": "",
   "refresh_token" : "",
   "access_token": "",
+  "auth_token": "",
   "region": "us",
   "mode": "sandbox"
 }

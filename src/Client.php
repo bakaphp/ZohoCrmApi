@@ -2,27 +2,36 @@
 
 namespace Webleit\ZohoCrmApi;
 
+use BenTools\GuzzleHttp\Middleware\Storage\Adapter\ArrayAdapter;
+use BenTools\GuzzleHttp\Middleware\ThrottleConfiguration;
+use BenTools\GuzzleHttp\Middleware\ThrottleMiddleware;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\ClientException;
+use GuzzleHttp\HandlerStack;
 use Psr\Http\Message\ResponseInterface;
 use Weble\ZohoClient\Enums\Region;
 use Weble\ZohoClient\OAuthClient;
 use Webleit\ZohoCrmApi\Enums\Mode;
 use Webleit\ZohoCrmApi\Exception\ApiError;
-use Webleit\ZohoCrmApi\Request\ListHeaders;
 use Webleit\ZohoCrmApi\Request\ListParameters;
+use Webleit\ZohoCrmApi\Request\RequestMatcher;
 
 class Client
 {
-    protected const ZOHOCRM_API_URL_PATH = "/crm/v2/";
-    protected const ZOHOCRM_API_PRODUCION_PARTIAL_HOST = "https://www.zohoapis";
-    protected const ZOHOCRM_API_DEVELOPER_PARTIAL_HOST = "https://developer.zoho";
-    protected const ZOHOCRM_API_SANDBOX_PARTIAL_HOST = "https://crmsandbox.zoho";
+    const ZOHOCRM_API_URL_PATH = "/crm/v2/";
+    const ZOHOCRM_API_PRODUCION_PARTIAL_HOST = "https://www.zohoapis";
+    const ZOHOCRM_API_DEVELOPER_PARTIAL_HOST = "https://developer.zoho";
+    const ZOHOCRM_API_SANDBOX_PARTIAL_HOST = "https://crmsandbox.zoho";
 
     /**
      * @var bool
      */
     protected $retriedRefresh = false;
+
+    /**
+     * @var bool
+     */
+    protected $throttle = false;
 
     /**
      * @var \GuzzleHttp\Client
@@ -35,7 +44,7 @@ class Client
     protected $oAuthClient;
 
     /**
-     * @var string
+     * @var Mode
      */
     protected $mode;
 
@@ -48,7 +57,7 @@ class Client
         $this->client = $client;
         $this->oAuthClient = $oAuthClient;
 
-        $this->setMode(Mode::PRODUCTION);
+        $this->setMode(Mode::production());
     }
 
     public function __call($name, $arguments)
@@ -71,48 +80,42 @@ class Client
         return $this;
     }
 
-    public function setRegion(string $region): self
+    public function throttle(int $maxRequests = 0, float $duration = 0): self
+    {
+        $this->throttle = $maxRequests > 0;
+        $this->client = new \GuzzleHttp\Client();
+
+        if ($this->throttle) {
+            $this->enableThrottling($maxRequests, $duration);
+        }
+
+        return $this;
+    }
+
+    protected function enableThrottling(int $maxRequests, float $duration): self
+    {
+        $stack = HandlerStack::create();
+        $middleware = new ThrottleMiddleware(new ArrayAdapter());
+
+        $middleware->registerConfiguration(new ThrottleConfiguration(new RequestMatcher(), $maxRequests, $duration, 'zoho'));
+
+        $stack->push($middleware, 'throttle');
+        $this->client = new \GuzzleHttp\Client(['handler' => $stack]);
+
+        return $this;
+    }
+
+    public function setRegion(Region $region): self
     {
         $this->oAuthClient->setRegion($region);
 
         return $this;
     }
 
-    /**
-     * @param string $uri
-     * @param array|ListParameters $params
-     * @param array|ListHeaders $headers
-     * @return array
-     * @throws ApiError
-     * @throws Exception\AuthFailed
-     * @throws Exception\DuplicateData
-     * @throws Exception\InvalidData
-     * @throws Exception\InvalidDataFormat
-     * @throws Exception\InvalidDataType
-     * @throws Exception\InvalidModule
-     * @throws Exception\InvalidUrlPattern
-     * @throws Exception\LimitExceeded
-     * @throws Exception\MandatoryDataNotFound
-     * @throws Exception\MethodNotAllowed
-     * @throws Exception\OAuthScopeMismatch
-     * @throws Exception\RequestEntityTooLarge
-     * @throws Exception\TooManyRequests
-     * @throws Exception\Unauthorized
-     * @throws Exception\UnsupportedMediaType
-     */
-    public function getList(string $uri, $params = [], $headers = []): array
+    public function getList(string $uri, array $params = []): array
     {
-        if (! $params instanceof ListParameters) {
-            $params = new ListParameters($params);
-        }
-
-        if (! $headers instanceof ListHeaders) {
-            $headers = new ListHeaders($headers);
-        }
-
-        $response = $this->call($uri, 'GET', ['query' => $params->toArray(), 'headers' => $headers->toArray()]);
-
-        ApiError::throwFromResponse($response);
+        $params = new ListParameters($params);
+        $response = $this->call($uri, 'GET', ['query' => $params->toArray()]);
 
         $body = $response->getBody();
 
@@ -127,12 +130,10 @@ class Client
             'query' => [],
             'form_params' => [],
             'json' => [],
+            'headers' => [
+                'Authorization' => 'Zoho-oauthtoken ' . $this->oAuthClient->getAccessToken(),
+            ],
         ], $data);
-
-        $options['headers'] = array_merge($data['headers'] ?? [], [
-            'Authorization' =>
-            'Zoho-oauthtoken ' . $this->oAuthClient->getAccessToken(),
-        ]);
 
         try {
             $response = $this->client->$method($this->getUrl() . $uri, array_filter($options));
@@ -143,7 +144,7 @@ class Client
         } catch (ClientException $e) {
             // Retry?
             if ($e->getCode() === 401 && ! $this->retriedRefresh) {
-                $this->oAuthClient->refreshAccessToken();
+                $this->oAuthClient->generateTokens()->getAccessToken();
                 $this->retriedRefresh = true;
 
                 return $this->call($uri, $method, $data);
@@ -164,39 +165,22 @@ class Client
     public function getBaseUrl(): string
     {
         switch ($this->getMode()) {
-            case Mode::DEVELOPER:
+            case Mode::developer():
                 $apiUrl = self::ZOHOCRM_API_DEVELOPER_PARTIAL_HOST;
 
                 break;
-            case Mode::SANDBOX:
+            case Mode::sandbox():
                 $apiUrl = self::ZOHOCRM_API_SANDBOX_PARTIAL_HOST;
 
                 break;
-            case Mode::PRODUCTION:
+            case Mode::production():
             default:
                 $apiUrl = self::ZOHOCRM_API_PRODUCION_PARTIAL_HOST;
 
                 break;
         }
 
-        return $apiUrl . $this->getRegionTLD();
-    }
-
-    protected function getRegionTLD(): string
-    {
-        switch ($this->getRegion()) {
-            case Region::AU:
-                return '.com.au';
-            case Region::EU:
-                return '.eu';
-            case Region::IN:
-                return '.in';
-            case Region::CN:
-                return '.com.cn';
-            case Region::US:
-            default:
-                return '.com';
-        }
+        return $apiUrl . $this->getRegion()->getValue();
     }
 
     public function getUrl(): string
@@ -204,19 +188,19 @@ class Client
         return $this->getBaseUrl() . self::ZOHOCRM_API_URL_PATH;
     }
 
-    public function getMode(): string
+    public function getMode(): Mode
     {
         return $this->mode;
     }
 
-    public function setMode(string $mode): self
+    public function setMode(Mode $mode): self
     {
         $this->mode = $mode;
 
         return $this;
     }
 
-    public function getRegion(): string
+    public function getRegion(): Region
     {
         return $this->oAuthClient->getRegion();
     }
@@ -258,26 +242,6 @@ class Client
         return $this->client;
     }
 
-    /**
-     * @param ResponseInterface $response
-     * @return array|string
-     * @throws ApiError
-     * @throws Exception\AuthFailed
-     * @throws Exception\DuplicateData
-     * @throws Exception\InvalidData
-     * @throws Exception\InvalidDataFormat
-     * @throws Exception\InvalidDataType
-     * @throws Exception\InvalidModule
-     * @throws Exception\InvalidUrlPattern
-     * @throws Exception\LimitExceeded
-     * @throws Exception\MandatoryDataNotFound
-     * @throws Exception\MethodNotAllowed
-     * @throws Exception\OAuthScopeMismatch
-     * @throws Exception\RequestEntityTooLarge
-     * @throws Exception\TooManyRequests
-     * @throws Exception\Unauthorized
-     * @throws Exception\UnsupportedMediaType
-     */
     public function processResult(ResponseInterface $response)
     {
         if (! $this->isSuccessfulResponse($response)) {
@@ -312,7 +276,5 @@ class Client
         }
 
         ApiError::throwFromResponse($response);
-
-        return '';
     }
 }

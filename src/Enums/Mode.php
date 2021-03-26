@@ -2,9 +2,17 @@
 
 namespace Webleit\ZohoCrmApi\Enums;
 
-abstract class Mode
+use Spatie\Enum\Enum;
+
+/**
+ * @method static self production()
+ * @method static self developer()
+ * @method static self sandbox()
+ *
+ * @method static bool isProduction(string $value = null)
+ * @method static bool isDeveloper(string $value = null)
+ * @method static bool isSandbox(string $value = null)
+ */
+class Mode extends Enum
 {
-    public const PRODUCTION = 'production';
-    public const DEVELOPER = 'developer';
-    public const SANDBOX = 'sandbox';
 }
